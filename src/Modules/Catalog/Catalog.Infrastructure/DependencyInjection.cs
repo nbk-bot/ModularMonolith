@@ -1,3 +1,4 @@
+using BuildingBlocks.Infrastructure.Persistence;
 using Catalog.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -12,9 +13,10 @@ public static class DependencyInjection
         var conn = config.GetConnectionString("Postgres")
             ?? throw new InvalidOperationException("Postgres connection string missing");
 
-        services.AddDbContext<CatalogDbContext>(o => o
+        services.AddDbContext<CatalogDbContext>((sp, o) => o
             .UseNpgsql(conn, b => b.MigrationsHistoryTable("__ef_migrations_history", CatalogDbContext.DefaultSchema))
-            .UseSnakeCaseNamingConvention());
+            .UseSnakeCaseNamingConvention()
+            .AddInterceptors(sp.GetRequiredService<DomainEventDispatcherInterceptor>()));
 
         services.AddMediatR(c => c.RegisterServicesFromAssembly(typeof(DependencyInjection).Assembly));
 

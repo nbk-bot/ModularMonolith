@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+option csharp_namespace = "Catalog.Presentation.Grpc";
+
+package catalog;
+
+service CatalogGrpc {
+  rpc ListProducts (ListProductsRequest) returns (ListProductsResponse);
+}
+
+message ListProductsRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message ListProductsResponse {
+  repeated Product items = 1;
+}
+
+message Product {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  double price = 4;
+  int32 stock = 5;
+  string created_at = 6;
+}

@@ -1,9 +1,18 @@
 using BuildingBlocks.Infrastructure;
+using BuildingBlocks.Infrastructure.OpenApi;
+using BuildingBlocks.Infrastructure.Scheduling;
 using Catalog.Application.Features.CreateProduct;
 using Catalog.Infrastructure;
+using Catalog.Infrastructure.Persistence;
+using Catalog.Presentation.Grpc;
+using Coravel;
+using GlobalErrorHandler;
 using Identity.Application.Features.Register;
 using Identity.Infrastructure;
+using Identity.Infrastructure.Persistence;
+using Identity.Infrastructure.Seeding;
 using Identity.Presentation.GraphQL;
+using MassTransit;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -30,7 +39,21 @@ try
     builder.Services.AddIdentityModule(cfg);
     builder.Services.AddCatalogModule(cfg);
 
-    builder.Services.AddMessaging(cfg);
+    // MassTransit + EF Core outbox per module DbContext, so Publish() inside a handler
+    // is captured into the outbox table in the same transaction as the entity changes.
+    builder.Services.AddMessaging(cfg, x =>
+    {
+        x.AddEntityFrameworkOutbox<IdentityDbContext>(o =>
+        {
+            o.UsePostgres();
+            o.UseBusOutbox();
+        });
+        x.AddEntityFrameworkOutbox<CatalogDbContext>(o =>
+        {
+            o.UsePostgres();
+            o.UseBusOutbox();
+        });
+    });
 
     builder.Services
         .AddGraphQLServer()
@@ -40,18 +63,44 @@ try
 
     builder.Services.AddGrpc();
     builder.Services.AddControllers();
-    builder.Services.AddOpenApi();
+    builder.Services.AddOpenApi(o =>
+    {
+        // Adds bearerAuth (http/bearer/JWT) to the generated OpenAPI document and applies it to all operations.
+        o.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
+    });
+
+    // Coravel scheduler + queue.
+    builder.Services.AddScheduler();
+    builder.Services.AddQueue();
+    builder.Services.AddTransient<CleanupExpiredRefreshTokensInvocable>();
 
     var app = builder.Build();
 
+    app.UseErrorHandler();
     app.UseSerilogRequestLogging();
     if (app.Environment.IsDevelopment()) app.MapOpenApi();
 
+    // CORS must run before authentication/authorization.
+    app.UseCors("DefaultCors");
     app.UseAuthentication();
     app.UseAuthorization();
 
     app.MapControllers();
     app.MapGraphQL("/graphql");
+    app.MapGrpcService<CatalogGrpcService>();
+    app.MapHealthChecks("/healthz");
+
+    // Sample Coravel schedule — runs daily, cleans up expired refresh tokens.
+    app.Services.UseScheduler(s =>
+    {
+        s.Schedule<CleanupExpiredRefreshTokensInvocable>().Daily();
+    });
+
+    // Dev-only data seeding (Admin/User roles + default admin user).
+    if (app.Environment.IsDevelopment())
+    {
+        await IdentitySeeder.SeedAsync(app.Services);
+    }
 
     app.Run();
 }

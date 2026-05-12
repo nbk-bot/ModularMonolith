@@ -268,16 +268,81 @@ Seq sink — `docker-compose.yml` da `seq` service `5341` portda. `appsettings.j
 
 `Coravel` 6.0.2 — scheduling + queues + caching + event broadcasting.
 
-Hozircha `Program.cs`'da chaqirilmagan — kerak bo'lsa:
+`Program.cs`'da wired:
 
 ```csharp
 builder.Services.AddScheduler();
 builder.Services.AddQueue();
+builder.Services.AddTransient<CleanupExpiredRefreshTokensInvocable>();
 // ...
-app.Services.UseScheduler(s => s.Schedule<SomeInvocable>().DailyAt(2, 0));
+app.Services.UseScheduler(s => s.Schedule<CleanupExpiredRefreshTokensInvocable>().Daily());
 ```
 
-`IInvocable` interfeysni implement qilgan class'lar scheduler'da yuriydi.
+Sample invocable: `BuildingBlocks.Infrastructure/Scheduling/CleanupExpiredRefreshTokensInvocable.cs` — kunda bir marta expired refresh token'larni `ApplicationUser` ustidan tozalaydi. BuildingBlocks Identity modulga referencelay olmagani uchun DbContext type ni runtime'da `AppDomain` orqali topadi. Ideal yechim — `BuildingBlocks.Application`'ga `IRefreshTokenStore` abstraction qo'shib, Identity infrastructure'da implementatsiya qilish (TODO).
+
+## Health checks
+
+`Microsoft.Extensions.Diagnostics.HealthChecks` (framework reference) + uchta provider:
+
+| Paket | Versiya |
+|---|---|
+| `AspNetCore.HealthChecks.NpgSql` | 9.0.0 |
+| `AspNetCore.HealthChecks.Redis` | 9.0.0 |
+| `AspNetCore.HealthChecks.Rabbitmq` | 9.0.0 |
+
+`AddBuildingBlocks` ichida `ConnectionStrings:Postgres / Redis / RabbitMQ` qiymatlarini o'qib registratsiya qiladi. RabbitMQ 9.x faqat `IConnection` factory'ni qabul qiladi — `RabbitMQ.Client.ConnectionFactory` singleton DI'ga registratsiya qilingan.
+
+Endpoint: `app.MapHealthChecks("/healthz")`.
+
+## CORS
+
+`AddBuildingBlocks` ichida `DefaultCors` policy registratsiya qilingan — development uchun `AllowAnyOrigin/Header/Method`. `Program.cs`'da `app.UseCors("DefaultCors")` autentifikatsiyadan oldin keladi. TODO: production uchun explicit origins ro'yxati bilan tighten qilish.
+
+## OpenAPI JWT bearer
+
+`Microsoft.AspNetCore.OpenApi` 10.0.7 ishlatamiz (Swashbuckle emas). `BuildingBlocks.Infrastructure/OpenApi/BearerSecuritySchemeTransformer.cs` — `IOpenApiDocumentTransformer` implementatsiyasi `bearerAuth` (http/bearer/JWT) security scheme'ni qo'shadi va barcha operatsiyalarga default requirement sifatida qo'llaydi.
+
+```csharp
+builder.Services.AddOpenApi(o => o.AddDocumentTransformer<BearerSecuritySchemeTransformer>());
+```
+
+`/openapi/v1.json` (faqat Development) endpoint'i shu sxema bilan to'lib chiqadi.
+
+## MassTransit EF Outbox
+
+`MassTransit.EntityFrameworkCore` 8.5.4 har bir module DbContext uchun outbox jadvallarini qo'shadi (`AddEntityFrameworkOutbox<TDbContext>`). `Program.cs`'dagi `AddMessaging`'ga ikkala DbContext registratsiya qilingan:
+
+```csharp
+builder.Services.AddMessaging(cfg, x =>
+{
+    x.AddEntityFrameworkOutbox<IdentityDbContext>(o => { o.UsePostgres(); o.UseBusOutbox(); });
+    x.AddEntityFrameworkOutbox<CatalogDbContext>(o =>  { o.UsePostgres(); o.UseBusOutbox(); });
+});
+```
+
+Handler ichida `bus.Publish(...)` `SaveChangesAsync`'dan **oldin** chaqiriladi — MassTransit message'ni outbox jadvaliga oladi va broker'ga faqat transaction commit bo'lgandan keyin yuboradi (`CreateProductCommandHandler` namuna).
+
+Outbox jadvalini yaratish uchun migration kerak — `OutboxMessage` / `OutboxState` / `InboxState` `IdentityDbContext.OnModelCreating` va `CatalogDbContext.OnModelCreating` ichidan `modelBuilder.AddOutboxStateEntity()` orqali model'ga qo'shilishi mumkin (kelajakda).
+
+## Domain event dispatcher
+
+`BuildingBlocks.Infrastructure/Persistence/DomainEventDispatcherInterceptor.cs` — `SaveChangesInterceptor`. SavingChangesAsync ichida `ChangeTracker` orqali tracked entity'lardan `IDomainEvent`'larni yig'ib oladi va `ClearDomainEvents()` chaqiradi; SavedChangesAsync ichida (transaction muvaffaqiyatli tugagandan keyin) har bir event'ni `IMediator.Publish` qiladi.
+
+Interceptor singleton DI'da, ikkala module DbContext (`IdentityDbContext`, `CatalogDbContext`) registratsiyasida `AddInterceptors(...)` orqali ulanadi. `IdentityDbContext` `IdentityDbContext<...>`'dan inherit qilgani uchun `BaseDbContext`'ga o'tib bo'lmadi — interceptor pattern bu cheklovni hal qildi.
+
+## Identity dev seed
+
+`Identity.Infrastructure/Seeding/IdentitySeeder.cs` — `Admin` + `User` rollarini ta'minlaydi va birorta user bo'lmasa `admin@local.dev` / `Admin123!` admin user yaratadi. `Program.cs`'da faqat `app.Environment.IsDevelopment()` da chaqiriladi.
+
+## OpenXML export endpoint
+
+`Catalog.Presentation/ProductsExcelExporter.cs` — `IReadOnlyList<ProductDto>`'ni bitta worksheet (Id/Name/Price/Stock/CreatedAt) xlsx fayliga aylantiradi. `ProductsController.Export` — `GET /api/products/export.xlsx`, katta pageSize bilan `GetProductsQuery` yuboradi.
+
+## gRPC sample
+
+- `Catalog.Presentation/Protos/catalog.proto` — `service CatalogGrpc { rpc ListProducts(...) returns (...); }`.
+- `Catalog.Presentation/Grpc/CatalogGrpcService.cs` — generated base'ni override qiladi, `ISender.Send(GetProductsQuery)` orqali MediatR'ga delegate qiladi.
+- `Program.cs`'da `app.MapGrpcService<CatalogGrpcService>()`.
 
 ## DocumentFormat.OpenXml
 

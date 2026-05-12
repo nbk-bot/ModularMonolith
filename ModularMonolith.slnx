@@ -20,4 +20,25 @@
     <Project Path="src/Modules/Identity/Identity.Infrastructure/Identity.Infrastructure.csproj" />
     <Project Path="src/Modules/Identity/Identity.Presentation/Identity.Presentation.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Api.Tests/Api.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/BuildingBlocks/">
+    <Project Path="tests/BuildingBlocks/BuildingBlocks.Application.Tests/BuildingBlocks.Application.Tests.csproj" />
+    <Project Path="tests/BuildingBlocks/BuildingBlocks.Domain.Tests/BuildingBlocks.Domain.Tests.csproj" />
+    <Project Path="tests/BuildingBlocks/BuildingBlocks.Infrastructure.Tests/BuildingBlocks.Infrastructure.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Modules/" />
+  <Folder Name="/tests/Modules/Catalog/">
+    <Project Path="tests/Modules/Catalog/Catalog.Application.Tests/Catalog.Application.Tests.csproj" />
+    <Project Path="tests/Modules/Catalog/Catalog.Domain.Tests/Catalog.Domain.Tests.csproj" />
+    <Project Path="tests/Modules/Catalog/Catalog.Infrastructure.Tests/Catalog.Infrastructure.Tests.csproj" />
+    <Project Path="tests/Modules/Catalog/Catalog.Presentation.Tests/Catalog.Presentation.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Modules/Identity/">
+    <Project Path="tests/Modules/Identity/Identity.Application.Tests/Identity.Application.Tests.csproj" />
+    <Project Path="tests/Modules/Identity/Identity.Domain.Tests/Identity.Domain.Tests.csproj" />
+    <Project Path="tests/Modules/Identity/Identity.Infrastructure.Tests/Identity.Infrastructure.Tests.csproj" />
+    <Project Path="tests/Modules/Identity/Identity.Presentation.Tests/Identity.Presentation.Tests.csproj" />
+  </Folder>
 </Solution>

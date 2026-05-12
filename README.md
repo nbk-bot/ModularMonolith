@@ -78,8 +78,11 @@ dotnet run --project src/Api
 - `POST /api/auth/register` — create account
 - `POST /api/auth/login` — issue JWT + refresh token
 - `GET /api/products` (anonymous), `POST /api/products` (auth)
+- `GET /api/products/export.xlsx` — OpenXML export of all products
 - `POST /graphql` — `query { me { id email roles } }` (auth)
-- gRPC: wire `.proto` files into module `Presentation` projects (Grpc.Tools is referenced)
+- gRPC: `CatalogGrpc.ListProducts` (`src/Modules/Catalog/Catalog.Presentation/Protos/catalog.proto`)
+- `GET /healthz` — Postgres + Redis + RabbitMQ health probe
+- `GET /openapi/v1.json` (Development only) — OpenAPI doc with `bearerAuth` JWT scheme
 
 ## Adding a new module
 
@@ -91,3 +94,5 @@ dotnet run --project src/Api
 ## Known issues
 
 - `HotChocolate.Language` 14.3.0 / 15.0.0 has GHSA-qr3m-xw4c-jqw3 — bump when a fixed version is published.
+- `AspNetCore.HealthChecks.Rabbitmq` 9.0.0 no longer accepts a connection string overload (RabbitMQ.Client v7 dropped that API); we register a singleton `IConnection` and the health check resolves it from DI. Eager connection at startup means the host throws if RabbitMQ is unreachable — fine for `docker compose` development, switch to lazy connection for production.
+- Dev seed (`IdentitySeeder`) provisions `admin@local.dev` / `Admin123!` only when `IWebHostEnvironment.IsDevelopment()` is true.
