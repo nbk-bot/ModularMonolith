@@ -1,3 +1,4 @@
+using BuildingBlocks.Infrastructure.Persistence;
 using Identity.Application.Abstractions;
 using Identity.Domain;
 using Identity.Infrastructure.Persistence;
@@ -16,9 +17,10 @@ public static class DependencyInjection
         var conn = config.GetConnectionString("Postgres")
             ?? throw new InvalidOperationException("Postgres connection string missing");
 
-        services.AddDbContext<IdentityDbContext>(o => o
+        services.AddDbContext<IdentityDbContext>((sp, o) => o
             .UseNpgsql(conn, b => b.MigrationsHistoryTable("__ef_migrations_history", IdentityDbContext.DefaultSchema))
-            .UseSnakeCaseNamingConvention());
+            .UseSnakeCaseNamingConvention()
+            .AddInterceptors(sp.GetRequiredService<DomainEventDispatcherInterceptor>()));
 
         services
             .AddIdentityCore<ApplicationUser>(o =>
