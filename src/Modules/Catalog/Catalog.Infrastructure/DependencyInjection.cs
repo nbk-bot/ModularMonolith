@@ -1,5 +1,8 @@
+using ActualLab.Fusion;
 using BuildingBlocks.Infrastructure.Persistence;
+using Catalog.Application;
 using Catalog.Infrastructure.Persistence;
+using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,7 +21,12 @@ public static class DependencyInjection
             .UseSnakeCaseNamingConvention()
             .AddInterceptors(sp.GetRequiredService<DomainEventDispatcherInterceptor>()));
 
-        services.AddMediatR(c => c.RegisterServicesFromAssembly(typeof(DependencyInjection).Assembly));
+        // Fusion compute service: replaces MediatR per-feature handler scan.
+        services.AddFusion().AddService<ICatalogService, CatalogService>();
+
+        // FluentValidation discovers Catalog.Application validators here
+        // (CreateProductCommandValidator etc.).
+        services.AddValidatorsFromAssembly(typeof(ICatalogService).Assembly);
 
         return services;
     }

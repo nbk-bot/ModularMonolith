@@ -1,15 +1,14 @@
-using System.Reflection;
 using System.Text;
+using ActualLab.CommandR;
+using ActualLab.Fusion;
 using BuildingBlocks.Application.Abstractions;
-using BuildingBlocks.Application.Behaviors;
 using BuildingBlocks.Infrastructure.Authentication;
 using BuildingBlocks.Infrastructure.Caching;
+using BuildingBlocks.Infrastructure.Commands;
 using BuildingBlocks.Infrastructure.Messaging;
 using BuildingBlocks.Infrastructure.Persistence;
-using FluentValidation;
 using LoggerBot;
 using MassTransit;
-using MediatR;
 using Messager.EskizUz;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
@@ -21,19 +20,23 @@ namespace BuildingBlocks.Infrastructure;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddBuildingBlocks(
-        this IServiceCollection services,
-        IConfiguration config,
-        params Assembly[] applicationAssemblies)
+    /// <summary>
+    /// Composition root for cross-cutting infrastructure: Fusion + CommandR,
+    /// FluentValidation command filter, JWT, Redis cache, MassTransit RabbitMQ
+    /// outbox host, health checks, CORS, Eskiz SMS, LoggerBot.
+    /// </summary>
+    public static IServiceCollection AddBuildingBlocks(this IServiceCollection services, IConfiguration config)
     {
-        // MediatR scans the supplied Application assemblies for IRequestHandler,
-        // INotificationHandler (domain events) and IPipelineBehavior implementations.
-        services.AddMediatR(c =>
-        {
-            c.RegisterServicesFromAssemblies(applicationAssemblies);
-            c.AddOpenBehavior(typeof(ValidationBehavior<,>));
-        });
-        services.AddValidatorsFromAssemblies(applicationAssemblies);
+        // ActualLab.Fusion + CommandR: replaces MediatR.
+        // Each module's IXxxService : IComputeService is registered in its own AddXxxModule.
+        var fusion = services.AddFusion();
+        var commander = fusion.Commander;
+
+        // Open-generic FluentValidation filter — runs before every business handler
+        // (Priority = 1_000_000, IsFilter = true). FluentValidation discovers IValidator<>
+        // instances per-module via AddValidatorsFromAssembly there.
+        services.AddTransient(typeof(ICommandHandler<>), typeof(FluentValidationCommandHandler<>));
+        commander.AddHandlers(typeof(FluentValidationCommandHandler<>));
 
         // Domain event dispatcher attached to every DbContext via interceptor (see BaseDbContext / IdentityDbContext registrations).
         services.AddSingleton<DomainEventDispatcherInterceptor>();

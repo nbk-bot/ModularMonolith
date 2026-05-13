@@ -60,6 +60,8 @@
     <PackageReference Include="GlobalErrorHandler" Version="2.0.5" />
     <PackageReference Include="LoggerBot" Version="1.5.3" />
     <PackageReference Include="Messager.EskizUz" Version="2.0.0" />
+
+    <PackageReference Include="ActualLab.Fusion" Version="12.5.2" />
   </ItemGroup>
 
 </Project>

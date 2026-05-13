@@ -1,4 +1,7 @@
+using ActualLab.Fusion;
 using BuildingBlocks.Infrastructure.Persistence;
+using FluentValidation;
+using Identity.Application;
 using Identity.Application.Abstractions;
 using Identity.Domain;
 using Identity.Infrastructure.Persistence;
@@ -38,7 +41,13 @@ public static class DependencyInjection
 
         services.AddScoped<ITokenService, TokenService>();
 
-        services.AddMediatR(c => c.RegisterServicesFromAssembly(typeof(DependencyInjection).Assembly));
+        // Fusion compute service: replaces MediatR per-feature handler scan.
+        // CommandR routes [CommandHandler]-marked methods through the FluentValidation
+        // open-generic filter registered in AddBuildingBlocks.
+        services.AddFusion().AddService<IIdentityService, IdentityService>();
+
+        // FluentValidation discovers Identity.Application validators here.
+        services.AddValidatorsFromAssembly(typeof(IIdentityService).Assembly);
 
         return services;
     }

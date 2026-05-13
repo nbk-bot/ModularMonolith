@@ -1,21 +1,25 @@
+using BuildingBlocks.Application.Abstractions;
 using BuildingBlocks.Domain;
-using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BuildingBlocks.Infrastructure.Persistence;
 
 /// <summary>
 /// Collects <see cref="IDomainEvent"/>s from tracked <c>Entity&lt;T&gt;</c>
-/// aggregates and dispatches them via MediatR <i>after</i> the transaction
-/// commits successfully. Registered as a singleton interceptor on every
-/// <see cref="DbContext"/> in the solution so both <c>CatalogDbContext</c>
-/// (which derives from <see cref="BaseDbContext"/>) and
+/// aggregates and dispatches them via <see cref="IDomainEventHandler{TEvent}"/>
+/// implementations resolved from <see cref="IServiceProvider"/> <i>after</i>
+/// the transaction commits successfully. Registered as a singleton interceptor
+/// on every <see cref="DbContext"/> in the solution so both
+/// <c>CatalogDbContext</c> (which derives from <see cref="BaseDbContext"/>) and
 /// <c>IdentityDbContext</c> (which must derive from ASP.NET Core's
 /// <c>IdentityDbContext&lt;...&gt;</c> and cannot inherit from
 /// <see cref="BaseDbContext"/>) get the same behaviour.
+/// Replaces the old MediatR-based fan-out — handlers are resolved by
+/// reflection (the simpler path noted in the refactor brief).
 /// </summary>
-public sealed class DomainEventDispatcherInterceptor(IMediator mediator) : SaveChangesInterceptor
+public sealed class DomainEventDispatcherInterceptor(IServiceProvider services) : SaveChangesInterceptor
 {
     // Per-context pending events; keyed by ContextId so concurrent saves don't collide.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, List<IDomainEvent>> _pending = new();
@@ -39,8 +43,10 @@ public sealed class DomainEventDispatcherInterceptor(IMediator mediator) : SaveC
         var ctx = eventData.Context;
         if (ctx is not null && _pending.TryRemove(ctx.ContextId.InstanceId, out var events))
         {
+            using var scope = services.CreateScope();
+            var sp = scope.ServiceProvider;
             foreach (var evt in events)
-                await mediator.Publish(evt, cancellationToken);
+                await DispatchAsync(sp, evt, cancellationToken);
         }
         return await base.SavedChangesAsync(eventData, result, cancellationToken);
     }
@@ -57,6 +63,21 @@ public sealed class DomainEventDispatcherInterceptor(IMediator mediator) : SaveC
         if (eventData.Context is not null)
             _pending.TryRemove(eventData.Context.ContextId.InstanceId, out _);
         return base.SaveChangesFailedAsync(eventData, cancellationToken);
+    }
+
+    private static async Task DispatchAsync(IServiceProvider sp, IDomainEvent evt, CancellationToken ct)
+    {
+        var handlerType = typeof(IDomainEventHandler<>).MakeGenericType(evt.GetType());
+        var handlers = (System.Collections.IEnumerable)sp.GetServices(handlerType);
+        var method = handlerType.GetMethod(nameof(IDomainEventHandler<IDomainEvent>.HandleAsync));
+        if (method is null) return;
+
+        foreach (var handler in handlers)
+        {
+            if (handler is null) continue;
+            var task = (Task?)method.Invoke(handler, [evt, ct]);
+            if (task is not null) await task;
+        }
     }
 
     private static List<IDomainEvent> ExtractAndClear(DbContext ctx)
