@@ -11,7 +11,9 @@ using Identity.Infrastructure.Persistence;
 using Identity.Infrastructure.Seeding;
 using Identity.Presentation.GraphQL;
 using MassTransit;
+using Microsoft.AspNetCore.RateLimiting;
 using Serilog;
+using System.Threading.RateLimiting;
 
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
@@ -30,7 +32,19 @@ try
 
     var cfg = builder.Configuration;
 
-    builder.Services.AddBuildingBlocks(cfg);
+    builder.Services.AddBuildingBlocks(cfg, builder.Environment);
+
+    // Rate limiting — "auth" policy applied to AuthController (5 req / 30s, no queue).
+    builder.Services.AddRateLimiter(o =>
+    {
+        o.AddFixedWindowLimiter("auth", w =>
+        {
+            w.PermitLimit = 5;
+            w.Window = TimeSpan.FromSeconds(30);
+            w.QueueLimit = 0;
+        });
+        o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    });
 
     builder.Services.AddIdentityModule(cfg);
     builder.Services.AddCatalogModule(cfg);
@@ -79,6 +93,7 @@ try
     // CORS must run before authentication/authorization.
     app.UseCors("DefaultCors");
     app.UseAuthentication();
+    app.UseRateLimiter();
     app.UseAuthorization();
 
     app.MapControllers();
@@ -108,3 +123,6 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+// Enables WebApplicationFactory<Program> in integration tests.
+public partial class Program;

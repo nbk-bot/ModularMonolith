@@ -13,7 +13,11 @@ using Messager.EskizUz;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using StackExchange.Redis;
 
 namespace BuildingBlocks.Infrastructure;
@@ -23,9 +27,10 @@ public static class DependencyInjection
     /// <summary>
     /// Composition root for cross-cutting infrastructure: Fusion + CommandR,
     /// FluentValidation command filter, JWT, Redis cache, MassTransit RabbitMQ
-    /// outbox host, health checks, CORS, Eskiz SMS, LoggerBot.
+    /// outbox host, health checks, env-based CORS, Eskiz SMS, LoggerBot,
+    /// OpenTelemetry tracing + metrics.
     /// </summary>
-    public static IServiceCollection AddBuildingBlocks(this IServiceCollection services, IConfiguration config)
+    public static IServiceCollection AddBuildingBlocks(this IServiceCollection services, IConfiguration config, IHostEnvironment env)
     {
         // ActualLab.Fusion + CommandR: replaces MediatR.
         // Each module's IXxxService : IComputeService is registered in its own AddXxxModule.
@@ -91,11 +96,44 @@ public static class DependencyInjection
             .AddRedis(redisConn, name: "redis")
             .AddRabbitMQ(name: "rabbitmq");
 
-        // TODO: tighten CORS in production — allow specific origins/headers/methods per environment.
-        services.AddCors(o => o.AddPolicy("DefaultCors", p => p
-            .AllowAnyOrigin()
-            .AllowAnyHeader()
-            .AllowAnyMethod()));
+        // Env-based CORS. Production MUST configure Cors:AllowedOrigins.
+        var allowedOrigins = config.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+        services.AddCors(o => o.AddPolicy("DefaultCors", p =>
+        {
+            if (allowedOrigins.Length > 0)
+            {
+                p.WithOrigins(allowedOrigins)
+                    .AllowCredentials()
+                    .AllowAnyHeader()
+                    .WithMethods("GET", "POST", "PUT", "DELETE", "PATCH");
+            }
+            else if (env.IsDevelopment())
+            {
+                p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "Cors:AllowedOrigins is empty in a non-development environment. " +
+                    "Configure the allowed origins list before starting.");
+            }
+        }));
+
+        // OpenTelemetry tracing + metrics with OTLP exporter (default: http://localhost:4317).
+        var otlpEndpoint = config["Otel:ExporterEndpoint"] ?? "http://localhost:4317";
+        var serviceName = config["Otel:ServiceName"] ?? "ModularMonolith";
+        services.AddOpenTelemetry()
+            .ConfigureResource(r => r.AddService(serviceName))
+            .WithTracing(t => t
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddEntityFrameworkCoreInstrumentation()
+                .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)))
+            .WithMetrics(m => m
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddRuntimeInstrumentation()
+                .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
 
         return services;
     }

@@ -1,4 +1,5 @@
 using ActualLab.Fusion;
+using BuildingBlocks.Application.Abstractions;
 using BuildingBlocks.Infrastructure.Persistence;
 using FluentValidation;
 using Identity.Application;
@@ -40,6 +41,7 @@ public static class DependencyInjection
             .AddDefaultTokenProviders();
 
         services.AddScoped<ITokenService, TokenService>();
+        services.AddScoped<IRefreshTokenStore, RefreshTokenStore>();
 
         // Fusion compute service: replaces MediatR per-feature handler scan.
         // CommandR routes [CommandHandler]-marked methods through the FluentValidation

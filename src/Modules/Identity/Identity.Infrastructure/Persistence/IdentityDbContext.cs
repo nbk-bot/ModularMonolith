@@ -1,4 +1,5 @@
 using Identity.Domain;
+using MassTransit;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
@@ -13,5 +14,11 @@ public sealed class IdentityDbContext(DbContextOptions<IdentityDbContext> option
     {
         modelBuilder.HasDefaultSchema(DefaultSchema);
         base.OnModelCreating(modelBuilder);
+
+        // MassTransit EF Core outbox tables. Migration is generated separately
+        // (see docs/integrations.md → "MassTransit EF Outbox").
+        modelBuilder.AddInboxStateEntity();
+        modelBuilder.AddOutboxMessageEntity();
+        modelBuilder.AddOutboxStateEntity();
     }
 }

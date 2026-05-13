@@ -9,11 +9,13 @@ using Identity.Application.Features.Register;
 using Identity.Application.Features.ResetPassword;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Identity.Presentation;
 
 [ApiController]
 [Route("api/auth")]
+[EnableRateLimiting("auth")]
 public sealed class AuthController(IIdentityService identity) : ControllerBase
 {
     [HttpPost("register")]
