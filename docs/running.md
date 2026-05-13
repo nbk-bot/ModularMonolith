@@ -76,10 +76,16 @@ Default `https://localhost:5001` portda ko'tariladi.
 ### REST
 
 ```
-POST /api/auth/register   — { email, password, fullName? }
-POST /api/auth/login      — { email, password } → { accessToken, refreshToken, expiresAt }
-GET  /api/products        — [AllowAnonymous] paginated list
-POST /api/products        — [Authorize] { name, price, stock, description? }
+POST /api/auth/register         — { email, password, fullName? }
+POST /api/auth/login            — { email, password } → { accessToken, refreshToken, expiresAt }
+POST /api/auth/refresh          — { refreshToken } → { accessToken, refreshToken, expiresAt }
+POST /api/auth/forgot-password  — { email }
+POST /api/auth/reset-password   — { email, token, newPassword }
+POST /api/auth/confirm-email    — { userId, token }
+POST /api/auth/logout           — [Authorize] no body
+GET  /api/products              — [AllowAnonymous] paginated list
+POST /api/products              — [Authorize] { name, price, stock, description? }
+GET  /api/products/export.xlsx  — [AllowAnonymous] Excel export
 ```
 
 Postman/Bruno test:
@@ -114,13 +120,14 @@ Banana Cake Pop IDE: brauzerda `https://localhost:5001/graphql` (Authorization h
 
 ### gRPC
 
-Hali `.proto` qo'shilmagan. Wire qilish uchun:
-1. `Identity.Presentation`'da `Protos/Auth.proto` yarating.
+Catalog modul'da namuna service ulangan (`src/Modules/Catalog/Catalog.Presentation/Protos/catalog.proto`, `CatalogGrpcService`). Yangi `.proto` qo'shish:
+1. `<Module>.Presentation`'da `Protos/Xxx.proto` yarating.
 2. `.csproj`'ga:
    ```xml
-   <Protobuf Include="Protos\Auth.proto" GrpcServices="Server" />
+   <Protobuf Include="Protos\Xxx.proto" GrpcServices="Server" />
    ```
-3. Service implementatsiyasi yozing va `app.MapGrpcService<AuthGrpcService>()` qo'shing.
+3. Service implementatsiyasi yozing — `IXxxService` Fusion compute service'ni DI orqali oling va metodlarini chaqiring.
+4. `Program.cs`'ga `app.MapGrpcService<XxxGrpcService>()` qo'shing.
 
 ## Yangi modul qo'shish
 
@@ -163,12 +170,57 @@ dotnet add src/Modules/Reporting/Reporting.Presentation reference \
 </ItemGroup>
 ```
 
-### 4. `Reporting.Infrastructure/DependencyInjection.cs`
+### 4. Compute service interface'i — `Reporting.Application/IReportingService.cs`
 
 ```csharp
+using ActualLab.CommandR;
+using ActualLab.CommandR.Configuration;
+using ActualLab.Fusion;
+
+namespace Reporting.Application;
+
+public interface IReportingService : IComputeService
+{
+    [CommandHandler] Task<ReportDto> GenerateReport(GenerateReportCommand command, CancellationToken ct = default);
+    [ComputeMethod]  Task<IReadOnlyList<ReportDto>> ListReports(CancellationToken ct = default);
+}
+```
+
+Command record:
+
+```csharp
+public sealed record GenerateReportCommand(string Name) : ICommand<ReportDto>;
+```
+
+### 5. Implementation — `Reporting.Infrastructure/ReportingService.cs`
+
+```csharp
+public class ReportingService(ReportingDbContext db) : IReportingService
+{
+    public virtual async Task<ReportDto> GenerateReport(GenerateReportCommand command, CancellationToken ct = default)
+    {
+        // ...
+    }
+
+    public virtual async Task<IReadOnlyList<ReportDto>> ListReports(CancellationToken ct = default)
+    {
+        // ...
+    }
+}
+```
+
+Metodlar **`virtual`** — Fusion proxy intercept qila olishi uchun.
+
+### 6. `Reporting.Infrastructure/DependencyInjection.cs`
+
+```csharp
+using ActualLab.Fusion;
+using BuildingBlocks.Infrastructure.Persistence;
+using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Reporting.Application;
 
 namespace Reporting.Infrastructure;
 
@@ -177,36 +229,53 @@ public static class DependencyInjection
     public static IServiceCollection AddReportingModule(this IServiceCollection services, IConfiguration config)
     {
         var conn = config.GetConnectionString("Postgres")!;
-        services.AddDbContext<ReportingDbContext>(o => o
+        services.AddDbContext<ReportingDbContext>((sp, o) => o
             .UseNpgsql(conn, b => b.MigrationsHistoryTable("__ef_migrations_history", ReportingDbContext.DefaultSchema))
-            .UseSnakeCaseNamingConvention());
-        services.AddMediatR(c => c.RegisterServicesFromAssembly(typeof(DependencyInjection).Assembly));
+            .UseSnakeCaseNamingConvention()
+            .AddInterceptors(sp.GetRequiredService<DomainEventDispatcherInterceptor>()));
+
+        services.AddFusion().AddService<IReportingService, ReportingService>();
+        services.AddValidatorsFromAssembly(typeof(IReportingService).Assembly);
+
         return services;
     }
 }
 ```
 
-### 5. `Api/Program.cs`
+### 7. `Api/Program.cs`
 
 ```csharp
-builder.Services.AddBuildingBlocks(cfg,
-    typeof(RegisterCommand).Assembly,
-    typeof(CreateProductCommand).Assembly,
-    typeof(SomeReportingCommand).Assembly);          // ← qo'shildi
-
+builder.Services.AddBuildingBlocks(cfg);          // assembly parametri yo'q
 builder.Services.AddIdentityModule(cfg);
 builder.Services.AddCatalogModule(cfg);
-builder.Services.AddReportingModule(cfg);             // ← qo'shildi
+builder.Services.AddReportingModule(cfg);          // ← qo'shildi
 ```
 
-### 6. `Api/Api.csproj`
+### 8. `Api/Api.csproj`
 
 ```xml
 <ProjectReference Include="..\Modules\Reporting\Reporting.Infrastructure\Reporting.Infrastructure.csproj" />
 <ProjectReference Include="..\Modules\Reporting\Reporting.Presentation\Reporting.Presentation.csproj" />
 ```
 
-### 7. Migration
+### 9. Controller — `Reporting.Presentation/ReportsController.cs`
+
+```csharp
+[ApiController]
+[Route("api/reports")]
+public sealed class ReportsController(IReportingService reporting) : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<IReadOnlyList<ReportDto>>> List(CancellationToken ct)
+        => Ok(await reporting.ListReports(ct));
+
+    [HttpPost]
+    public async Task<ActionResult<ReportDto>> Generate([FromBody] GenerateReportRequest req, CancellationToken ct)
+        => Ok(await reporting.GenerateReport(new GenerateReportCommand(req.Name), ct));
+}
+```
+
+### 10. Migration
 
 ```bash
 dotnet ef migrations add Init \
@@ -229,5 +298,6 @@ Yangi `reporting` schema Postgres'da paydo bo'ladi.
 | `Postgres connection string missing` | `appsettings.json:ConnectionStrings:Postgres` to'g'rilangan emas |
 | EF migrations'da `connection refused` | `docker compose up -d postgres` qilinmagan |
 | `JWT signing key` xatosi | `Jwt:SigningKey` 32 belgi minimum bo'lishi kerak |
-| Build'da `Nullable\`1` xatosi | Form'ning `Label`siz `T="int?"` ishlatilgan — `RequiredTextField` yo'q, bu boshqa loyihaga tegishli |
+| `Fusion: method must be virtual` | Compute service implementation metodi `virtual` qilinmagan — `public virtual async Task<...>` ko'rinishida bo'lishi shart |
+| `No handler found for command` | Modul'ning `AddXxxModule` ichida `services.AddFusion().AddService<IXxxService, XxxService>()` chaqirilmagan |
 | `HotChocolate.Language` NU1904 warning | Hozircha ma'lum bug, ignoring xavfsiz (transitively only) |

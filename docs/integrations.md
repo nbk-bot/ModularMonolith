@@ -14,9 +14,10 @@ Barcha cross-cutting infrastructure'lar `BuildingBlocks.Infrastructure`'da o'rna
 Har bir DbContext registratsiyasida:
 
 ```csharp
-services.AddDbContext<CatalogDbContext>(o => o
+services.AddDbContext<CatalogDbContext>((sp, o) => o
     .UseNpgsql(conn, b => b.MigrationsHistoryTable("__ef_migrations_history", CatalogDbContext.DefaultSchema))
-    .UseSnakeCaseNamingConvention());
+    .UseSnakeCaseNamingConvention()
+    .AddInterceptors(sp.GetRequiredService<DomainEventDispatcherInterceptor>()));
 ```
 
 `UseSnakeCaseNamingConvention()` natijasi:
@@ -57,7 +58,7 @@ public interface ICacheService
 }
 ```
 
-Handler'larda DI orqali `ICacheService` injektsiya, ishlatilishi:
+Compute service metodlarida DI orqali `ICacheService` injektsiya:
 
 ```csharp
 var cached = await cache.GetAsync<ProductDto>($"product:{id}", ct);
@@ -65,6 +66,8 @@ if (cached is not null) return cached;
 // ... DB'dan o'qish ...
 await cache.SetAsync($"product:{id}", dto, TimeSpan.FromMinutes(10), ct);
 ```
+
+Eslatma: Fusion `[ComputeMethod]` allaqachon in-process reactive cache beradi (invalidation orqali yangilanadi) — Redis cross-instance distributed cache uchun mo'ljallangan.
 
 ## RabbitMQ + MassTransit
 
@@ -90,17 +93,22 @@ public static IServiceCollection AddMessaging(this IServiceCollection services,
 }
 ```
 
-Publish:
+Publish — Fusion compute service ichidan to'g'ridan-to'g'ri:
 
 ```csharp
-internal sealed class CreateProductCommandHandler(CatalogDbContext db, IPublishEndpoint bus)
-    : IRequestHandler<CreateProductCommand, ProductDto>
+public class CatalogService(CatalogDbContext db, IPublishEndpoint bus) : ICatalogService
 {
-    public async Task<ProductDto> Handle(...)
+    public virtual async Task<ProductDto> CreateProduct(CreateProductCommand command, CancellationToken ct = default)
     {
-        // ...
-        await bus.Publish(new ProductCreatedIntegrationEvent(...), ct);
-        // ...
+        var product = Product.Create(command.Name, command.Price, command.Stock, command.Description);
+        db.Products.Add(product);
+
+        // EF Core outbox aktiv — Publish() outbox jadvaliga oladi,
+        // brokerga faqat SaveChangesAsync transactioni commit bo'lgandan keyin yuboriladi.
+        await bus.Publish(new ProductCreatedIntegrationEvent(product.Id, product.Name, product.Price), ct);
+
+        await db.SaveChangesAsync(ct);
+        return product.ToDto();
     }
 }
 ```
@@ -163,7 +171,7 @@ jti = guid (har token uchun unique)
 role = ... (har bir rol uchun alohida claim)
 ```
 
-Refresh token — `RandomNumberGenerator.GetBytes(64)` → base64. DB'da `ApplicationUser.RefreshToken` + `RefreshTokenExpiresAt`. Refresh endpoint loyihaga hali qo'shilmagan — tipik: `POST /api/auth/refresh` → eskini DB'da topish → expiry tekshirish → yangi access+refresh berish.
+Refresh token — `RandomNumberGenerator.GetBytes(64)` → base64. DB'da `ApplicationUser.RefreshToken` + `RefreshTokenExpiresAt`. `POST /api/auth/refresh` endpointi `IIdentityService.Refresh(RefreshTokenCommand)` ni chaqiradi → eskini DB'da topadi → expiry tekshiradi → yangi access+refresh beradi.
 
 ## GraphQL (HotChocolate)
 
@@ -213,10 +221,21 @@ Header: `Authorization: Bearer <jwt>`.
 
 ```csharp
 builder.Services.AddGrpc();
-// app.MapGrpcService<MyGrpcService>();
+app.MapGrpcService<CatalogGrpcService>();
 ```
 
-Hozircha boshlang'ich service'lar yo'q — `.proto`'larni qo'shib, generated server class'idan service yaratasiz.
+Misol service — Fusion compute service'ni to'g'ridan-to'g'ri chaqiradi:
+
+```csharp
+public sealed class CatalogGrpcService(ICatalogService catalog) : CatalogGrpc.CatalogGrpcBase
+{
+    public override async Task<ListProductsResponse> ListProducts(ListProductsRequest req, ServerCallContext ctx)
+    {
+        var items = await catalog.GetProducts(req.Page, req.PageSize, ctx.CancellationToken);
+        // ... map to proto response ...
+    }
+}
+```
 
 ## Serilog
 
@@ -320,15 +339,17 @@ builder.Services.AddMessaging(cfg, x =>
 });
 ```
 
-Handler ichida `bus.Publish(...)` `SaveChangesAsync`'dan **oldin** chaqiriladi — MassTransit message'ni outbox jadvaliga oladi va broker'ga faqat transaction commit bo'lgandan keyin yuboradi (`CreateProductCommandHandler` namuna).
+Compute service ichida `bus.Publish(...)` `SaveChangesAsync`'dan **oldin** chaqiriladi — MassTransit message'ni outbox jadvaliga oladi va broker'ga faqat transaction commit bo'lgandan keyin yuboradi (`CatalogService.CreateProduct` namuna).
 
 Outbox jadvalini yaratish uchun migration kerak — `OutboxMessage` / `OutboxState` / `InboxState` `IdentityDbContext.OnModelCreating` va `CatalogDbContext.OnModelCreating` ichidan `modelBuilder.AddOutboxStateEntity()` orqali model'ga qo'shilishi mumkin (kelajakda).
 
 ## Domain event dispatcher
 
-`BuildingBlocks.Infrastructure/Persistence/DomainEventDispatcherInterceptor.cs` — `SaveChangesInterceptor`. SavingChangesAsync ichida `ChangeTracker` orqali tracked entity'lardan `IDomainEvent`'larni yig'ib oladi va `ClearDomainEvents()` chaqiradi; SavedChangesAsync ichida (transaction muvaffaqiyatli tugagandan keyin) har bir event'ni `IMediator.Publish` qiladi.
+`BuildingBlocks.Infrastructure/Persistence/DomainEventDispatcherInterceptor.cs` — `SaveChangesInterceptor`. `SavingChangesAsync` ichida `ChangeTracker` orqali tracked entity'lardan `IDomainEvent`'larni yig'ib oladi va `ClearDomainEvents()` chaqiradi; `SavedChangesAsync` ichida (transaction muvaffaqiyatli tugagandan keyin) har bir event uchun DI'dan barcha `IDomainEventHandler<TEvent>` larni resolve qiladi va `HandleAsync` ni chaqiradi.
 
 Interceptor singleton DI'da, ikkala module DbContext (`IdentityDbContext`, `CatalogDbContext`) registratsiyasida `AddInterceptors(...)` orqali ulanadi. `IdentityDbContext` `IdentityDbContext<...>`'dan inherit qilgani uchun `BaseDbContext`'ga o'tib bo'lmadi — interceptor pattern bu cheklovni hal qildi.
+
+MediatR `INotification` o'rniga shu `IDomainEventHandler<T>` abstractioni ishlatiladi — endi `MediatR.IPublisher`/`IMediator` ga bog'liqlik yo'q.
 
 ## Identity dev seed
 
@@ -336,13 +357,7 @@ Interceptor singleton DI'da, ikkala module DbContext (`IdentityDbContext`, `Cata
 
 ## OpenXML export endpoint
 
-`Catalog.Presentation/ProductsExcelExporter.cs` — `IReadOnlyList<ProductDto>`'ni bitta worksheet (Id/Name/Price/Stock/CreatedAt) xlsx fayliga aylantiradi. `ProductsController.Export` — `GET /api/products/export.xlsx`, katta pageSize bilan `GetProductsQuery` yuboradi.
-
-## gRPC sample
-
-- `Catalog.Presentation/Protos/catalog.proto` — `service CatalogGrpc { rpc ListProducts(...) returns (...); }`.
-- `Catalog.Presentation/Grpc/CatalogGrpcService.cs` — generated base'ni override qiladi, `ISender.Send(GetProductsQuery)` orqali MediatR'ga delegate qiladi.
-- `Program.cs`'da `app.MapGrpcService<CatalogGrpcService>()`.
+`Catalog.Presentation/ProductsExcelExporter.cs` — `IReadOnlyList<ProductDto>`'ni bitta worksheet (Id/Name/Price/Stock/CreatedAt) xlsx fayliga aylantiradi. `ProductsController.Export` — `GET /api/products/export.xlsx`, katta `pageSize` bilan `ICatalogService.GetProducts(1, 100_000, ct)` chaqiradi.
 
 ## DocumentFormat.OpenXml
 
@@ -360,41 +375,101 @@ public static byte[] ToExcel(IEnumerable<ProductDto> products)
 }
 ```
 
-Controller'da:
+Controller'da (compute service'ni to'g'ridan-to'g'ri chaqirib):
 
 ```csharp
 [HttpGet("export.xlsx")]
 public async Task<IActionResult> Export(CancellationToken ct)
 {
-    var list = await sender.Send(new GetProductsQuery(1, int.MaxValue), ct);
+    var list = await catalog.GetProducts(1, 100_000, ct);
     var bytes = ProductsExcelExporter.ToExcel(list);
     return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "products.xlsx");
 }
 ```
 
-## MediatR + FluentValidation
+## ActualLab.Fusion + CommandR + FluentValidation
 
-`MediatR` 12.4.1 (so'nggi free version), `FluentValidation` 12.0.0.
+`ActualLab.Fusion` 12.5.2 (Apache 2.0) — CQRS yo'naltirilgan reactive compute service framework. MediatR o'rnida ishlatamiz.
 
-`AddBuildingBlocks` har bir passed assembly'da handlerlarni va validatorlarni topib register qiladi:
+`AddBuildingBlocks`'da global wiring:
 
 ```csharp
-services.AddMediatR(c =>
+var fusion = services.AddFusion();
+var commander = fusion.Commander;
+
+// Open-generic FluentValidation filter (Priority = 1_000_000, IsFilter = true)
+services.AddTransient(typeof(ICommandHandler<>), typeof(FluentValidationCommandHandler<>));
+commander.AddHandlers(typeof(FluentValidationCommandHandler<>));
+```
+
+Har modul'ning `AddXxxModule` ichida:
+
+```csharp
+services.AddFusion().AddService<IIdentityService, IdentityService>();   // proxy generation
+services.AddValidatorsFromAssembly(typeof(IIdentityService).Assembly);  // validatorlarni topadi
+```
+
+### Command record
+
+```csharp
+public sealed record RegisterCommand(string Email, string Password, string? FullName)
+    : ICommand<UserDto>;
+```
+
+### Compute service
+
+Yagona public interface, `[CommandHandler]` va `[ComputeMethod]` attributelar bilan:
+
+```csharp
+public interface IIdentityService : IComputeService
 {
-    c.RegisterServicesFromAssemblies(applicationAssemblies);
-    c.AddOpenBehavior(typeof(ValidationBehavior<,>));
-});
-services.AddValidatorsFromAssemblies(applicationAssemblies);
+    [CommandHandler] Task<UserDto> Register(RegisterCommand command, CancellationToken ct = default);
+    [ComputeMethod]  Task<UserDto?> GetCurrentUser(Guid userId, CancellationToken ct = default);
+}
 ```
 
-`ValidationBehavior` — har MediatR request'dan oldin shu request type uchun barcha validatorlarni yuradi:
+Implementation Infrastructure layer'ida — metodlar **`virtual`** bo'lishi shart:
 
 ```csharp
-var failures = (await Task.WhenAll(validators.Select(v => v.ValidateAsync(context, ct))))
-    .SelectMany(r => r.Errors).Where(f => f is not null).ToList();
-if (failures.Count > 0) throw new ValidationException(failures);
-return await next();
+public class IdentityService(UserManager<ApplicationUser> users, ITokenService tokens) : IIdentityService
+{
+    public virtual async Task<UserDto> Register(RegisterCommand command, CancellationToken ct = default) { /* ... */ }
+    public virtual async Task<UserDto?> GetCurrentUser(Guid userId, CancellationToken ct = default) { /* ... */ }
+}
 ```
+
+### FluentValidation filter
+
+`BuildingBlocks.Infrastructure/Commands/FluentValidationCommandHandler.cs`:
+
+```csharp
+public sealed class FluentValidationCommandHandler<TCommand>(IEnumerable<IValidator<TCommand>> validators)
+    : ICommandHandler<TCommand>
+    where TCommand : class, ICommand
+{
+    [CommandHandler(Priority = 1_000_000, IsFilter = true)]
+    public async Task OnCommand(TCommand command, CommandContext context, CancellationToken cancellationToken)
+    {
+        if (validators.Any())
+        {
+            var ctx = new ValidationContext<TCommand>(command);
+            var failures = (await Task.WhenAll(validators.Select(v => v.ValidateAsync(ctx, cancellationToken))))
+                .SelectMany(r => r.Errors).Where(f => f is not null).ToList();
+            if (failures.Count > 0) throw new ValidationException(failures);
+        }
+        await context.InvokeRemainingHandlers(cancellationToken);
+    }
+}
+```
+
+`Priority = 1_000_000` filterni har qanday business handler'dan oldin yurguzadi (CommandR pipeline'da yuqori priority avval keladi). Eski MediatR `ValidationBehavior<,>` shu filter'ning to'liq o'rnini bosadi.
+
+### Nima uchun MediatR emas
+
+- Bitta paket (`ActualLab.Fusion`) — CQRS + reactive cache + invalidation + Blazor integration.
+- Reactive `Computed<T>` — query natijalari avtomatik cache'lanadi, `Computed.Invalidate()` orqali yangilanadi (Fusion sub'larga signal yuboradi).
+- Bitta service interface — modul'ning butun API'si, per-feature handler discovery yo'q.
+- MIT/Apache litsenziyali (MediatR 12.5+ commercial bo'ldi).
 
 ## Riok.Mapperly
 
