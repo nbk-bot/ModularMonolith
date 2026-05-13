@@ -1,5 +1,5 @@
-using MediatR;
+using ActualLab.CommandR;
 
 namespace Identity.Application.Features.ForgotPassword;
 
-public sealed record ForgotPasswordCommand(string Email) : IRequest;
+public sealed record ForgotPasswordCommand(string Email) : ICommand;

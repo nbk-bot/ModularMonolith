@@ -1,13 +1,11 @@
 using BuildingBlocks.Infrastructure;
 using BuildingBlocks.Infrastructure.OpenApi;
 using BuildingBlocks.Infrastructure.Scheduling;
-using Catalog.Application.Features.CreateProduct;
 using Catalog.Infrastructure;
 using Catalog.Infrastructure.Persistence;
 using Catalog.Presentation.Grpc;
 using Coravel;
 using GlobalErrorHandler;
-using Identity.Application.Features.Register;
 using Identity.Infrastructure;
 using Identity.Infrastructure.Persistence;
 using Identity.Infrastructure.Seeding;
@@ -32,9 +30,7 @@ try
 
     var cfg = builder.Configuration;
 
-    builder.Services.AddBuildingBlocks(cfg,
-        typeof(RegisterCommand).Assembly,
-        typeof(CreateProductCommand).Assembly);
+    builder.Services.AddBuildingBlocks(cfg);
 
     builder.Services.AddIdentityModule(cfg);
     builder.Services.AddCatalogModule(cfg);

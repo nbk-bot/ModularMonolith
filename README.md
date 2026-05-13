@@ -9,7 +9,7 @@ Clean Architecture modular monolith template built on **.NET 10**.
 - Dapper (raw SQL when EF is overkill)
 - PostgreSQL 17
 - Riok.Mapperly (source-generated mapping)
-- MediatR + FluentValidation (CQRS + validation pipeline)
+- ActualLab.Fusion (CQRS + reactive compute services) + FluentValidation
 - MassTransit + RabbitMQ (integration events)
 - HotChocolate (GraphQL)
 - gRPC (`Grpc.AspNetCore`)
@@ -26,23 +26,23 @@ src/
 ├── Api/                              # Composition root (Program.cs)
 ├── BuildingBlocks/
 │   ├── BuildingBlocks.Domain/        # Entity<T>, AggregateRoot<T>, IDomainEvent
-│   ├── BuildingBlocks.Application/   # ICacheService, IIntegrationEvent, ValidationBehavior
-│   └── BuildingBlocks.Infrastructure/# DI extensions, RedisCacheService, JWT, BaseDbContext, AddMessaging
+│   ├── BuildingBlocks.Application/   # ICacheService, IIntegrationEvent, IDomainEventHandler<>
+│   └── BuildingBlocks.Infrastructure/# DI extensions, RedisCacheService, JWT, BaseDbContext, AddMessaging, FluentValidationCommandHandler (Fusion filter)
 ├── Modules/
 │   ├── Identity/                     # AspNet Identity + JWT + GraphQL Me query
 │   │   ├── Identity.Domain/
-│   │   ├── Identity.Application/
-│   │   ├── Identity.Infrastructure/  # IdentityDbContext, TokenService, handlers
+│   │   ├── Identity.Application/     # IIdentityService : IComputeService + command records (ICommand<TResult>)
+│   │   ├── Identity.Infrastructure/  # IdentityDbContext, TokenService, IdentityService (Fusion impl)
 │   │   └── Identity.Presentation/    # AuthController, IdentityQueries
 │   └── Catalog/                      # CRUD example with MassTransit publishing
 │       ├── Catalog.Domain/           # Product aggregate + domain events
-│       ├── Catalog.Application/
-│       ├── Catalog.Infrastructure/   # CatalogDbContext + handlers
+│       ├── Catalog.Application/      # ICatalogService : IComputeService + CreateProductCommand
+│       ├── Catalog.Infrastructure/   # CatalogDbContext + CatalogService (Fusion impl)
 │       └── Catalog.Presentation/     # ProductsController
 └── tests/
 ```
 
-Per module: each `AddXxxModule` extension boots its own EF Core `DbContext` in its own Postgres schema (`identity`, `catalog`) and registers MediatR handlers from the module's Infrastructure assembly.
+Per module: each `AddXxxModule` extension boots its own EF Core `DbContext` in its own Postgres schema (`identity`, `catalog`) and registers a single Fusion compute service (`services.AddFusion().AddService<IXxxService, XxxService>()`) that subsumes every command/query for the module. The open-generic `FluentValidationCommandHandler<>` filter registered in `AddBuildingBlocks` runs FluentValidation before any business handler.
 
 ## Snake_case naming
 

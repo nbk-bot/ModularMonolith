@@ -1,11 +1,11 @@
+using ActualLab.CommandR;
 using Catalog.Application.Contracts;
 using FluentValidation;
-using MediatR;
 
 namespace Catalog.Application.Features.CreateProduct;
 
 public sealed record CreateProductCommand(string Name, decimal Price, int Stock, string? Description)
-    : IRequest<ProductDto>;
+    : ICommand<ProductDto>;
 
 public sealed class CreateProductCommandValidator : AbstractValidator<CreateProductCommand>
 {
