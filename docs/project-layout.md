@@ -5,19 +5,19 @@ src/
 ├── Api/                                  ← Composition root (Program.cs)
 ├── BuildingBlocks/
 │   ├── BuildingBlocks.Domain/            ← Entity<T>, AggregateRoot<T>, IDomainEvent
-│   ├── BuildingBlocks.Application/       ← ICacheService, IUnitOfWork, IntegrationEvent, ValidationBehavior
-│   └── BuildingBlocks.Infrastructure/    ← AddBuildingBlocks/AddMessaging DI, Redis, JWT, BaseDbContext
+│   ├── BuildingBlocks.Application/       ← ICacheService, IUnitOfWork, IntegrationEvent, IDomainEventHandler<>, ISmsSender
+│   └── BuildingBlocks.Infrastructure/    ← AddBuildingBlocks/AddMessaging DI, Fusion + CommandR wiring, FluentValidationCommandHandler<>, Redis, JWT, BaseDbContext, DomainEventDispatcherInterceptor
 ├── Modules/
 │   ├── Identity/
 │   │   ├── Identity.Domain/
-│   │   ├── Identity.Application/
-│   │   ├── Identity.Infrastructure/
-│   │   └── Identity.Presentation/
+│   │   ├── Identity.Application/         ← IIdentityService : IComputeService + Features/*/XxxCommand records
+│   │   ├── Identity.Infrastructure/      ← IdentityDbContext, TokenService, IdentityService (Fusion impl)
+│   │   └── Identity.Presentation/        ← AuthController (injects IIdentityService directly)
 │   └── Catalog/
 │       ├── Catalog.Domain/
-│       ├── Catalog.Application/
-│       ├── Catalog.Infrastructure/
-│       └── Catalog.Presentation/
+│       ├── Catalog.Application/          ← ICatalogService : IComputeService + CreateProductCommand
+│       ├── Catalog.Infrastructure/       ← CatalogDbContext, CatalogService (Fusion impl)
+│       └── Catalog.Presentation/         ← ProductsController, ProductsExcelExporter, gRPC service
 └── tests/
 ```
 
@@ -34,7 +34,7 @@ src/
 | `{Module}.Presentation` | `{Module}.Application` |
 | `Api` | `BuildingBlocks.Infrastructure` + all `{Module}.Infrastructure` + all `{Module}.Presentation` |
 
-Diqqat: `Presentation` `Infrastructure`'ni reference qilmaydi — handler'lar Infrastructure'da, Presentation faqat `ISender` (MediatR) orqali ularni chaqiradi.
+Diqqat: `Presentation` `Infrastructure`'ni reference qilmaydi — implementation Infrastructure'da `XxxService : IXxxService` shaklida joylashgan, Presentation faqat `IXxxService` (Fusion compute service) interface'ini DI orqali oladi va uning metodlarini to'g'ridan-to'g'ri chaqiradi (`ISender`/`IMediator` o'rniga).
 
 ## Har bir BuildingBlock'da nima bor
 
@@ -48,14 +48,19 @@ Diqqat: `Presentation` `Infrastructure`'ni reference qilmaydi — handler'lar In
 
 | Folder | Content |
 |---|---|
-| `Abstractions/` | `ICacheService`, `IUnitOfWork`, `IIntegrationEvent`, `IntegrationEvent` record |
-| `Behaviors/` | `ValidationBehavior<TRequest,TResponse>` — MediatR pipeline behavior, command oldidan FluentValidation'ni yuradi |
+| `Abstractions/` | `ICacheService`, `IUnitOfWork`, `IIntegrationEvent`, `IntegrationEvent` record, `IDomainEventHandler<TEvent>`, `ISmsSender` |
+
+`ValidationBehavior` endi yo'q — Fusion CommandR uchun open-generic filter `BuildingBlocks.Infrastructure`'ga ko'chirilgan.
 
 ### `BuildingBlocks.Infrastructure`
 
 | Folder/File | Content |
 |---|---|
+| `Commands/FluentValidationCommandHandler.cs` | Open-generic `ICommandHandler<TCommand>` — `[CommandHandler(Priority = 1_000_000, IsFilter = true)]`. Har bir Fusion command'dan oldin yurib FluentValidation tekshiruvini bajaradi. Eski MediatR `ValidationBehavior<,>`'ning o'rnini bosadi. |
 | `Persistence/BaseDbContext.cs` | Module DbContext'lari uchun abstract base, `Schema` property orqali Postgres schemasi |
+| `Persistence/DomainEventDispatcherInterceptor.cs` | `SaveChangesInterceptor` — transaction muvaffaqiyatli bo'lgandan keyin tracked entitylardan `IDomainEvent`'larni yig'adi va DI'dagi har bir `IDomainEventHandler<T>` ga yetkazadi |
 | `Caching/RedisCacheService.cs` | `ICacheService` Redis implementatsiyasi |
 | `Authentication/JwtOptions.cs` | `appsettings.json:Jwt` bo'limi binding |
-| `DependencyInjection.cs` | `AddBuildingBlocks(IConfiguration, applicationAssemblies)` + `AddMessaging(IConfiguration, extra)` |
+| `DependencyInjection.cs` | `AddBuildingBlocks(IConfiguration)` (Fusion + CommandR + FluentValidation filter + JWT + Redis + health + CORS + Eskiz + LoggerBot) va `AddMessaging(IConfiguration, extra)` |
+
+`AddBuildingBlocks` endi `applicationAssemblies` parametr olmaydi — handlerlarni assembly'dan topish kerak emas, har modul'ning `AddXxxModule` ichida `services.AddFusion().AddService<IXxxService, XxxService>()` va `services.AddValidatorsFromAssembly(typeof(IXxxService).Assembly)` chaqiriladi.
