@@ -14,6 +14,10 @@ public sealed class Product : AggregateRoot<Guid>
 
     public static Product Create(string name, decimal price, int stock, string? description = null)
     {
+        if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Name must not be empty", nameof(name));
+        if (price <= 0) throw new ArgumentException("Price must be > 0", nameof(price));
+        if (stock < 0) throw new ArgumentException("Stock must be >= 0", nameof(stock));
+
         var product = new Product
         {
             Id = Guid.NewGuid(),
