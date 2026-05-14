@@ -12,6 +12,9 @@ using Identity.Infrastructure.Seeding;
 using Identity.Presentation.GraphQL;
 using MassTransit;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Serilog;
 using System.Threading.RateLimiting;
 
@@ -107,10 +110,30 @@ try
         s.Schedule<CleanupExpiredRefreshTokensInvocable>().Daily();
     });
 
-    // Dev-only data seeding (Admin/User roles + default admin user).
+    // Dev-only auto-provision schema for every module DbContext, then seed
+    // (Admin/User roles + default admin user). No EF migrations exist yet, so we
+    // call IRelationalDatabaseCreator.CreateTablesAsync per context — Database.EnsureCreatedAsync
+    // skips the second context when both share the same database. Switch to
+    // MigrateAsync once migrations are added. Production runs provisioning out-of-band.
     if (app.Environment.IsDevelopment())
     {
+        using (var scope = app.Services.CreateScope())
+        {
+            await EnsureSchemaAsync(scope.ServiceProvider.GetRequiredService<IdentityDbContext>());
+            await EnsureSchemaAsync(scope.ServiceProvider.GetRequiredService<CatalogDbContext>());
+        }
         await IdentitySeeder.SeedAsync(app.Services);
+
+        static async Task EnsureSchemaAsync(DbContext db)
+        {
+            var creator = (RelationalDatabaseCreator)db.GetService<IDatabaseCreator>();
+            if (!await creator.ExistsAsync()) await creator.CreateAsync();
+            // HasTablesAsync returns true once ANY context has provisioned tables in the shared DB,
+            // so we run CreateTables unconditionally and swallow "table already exists" — each
+            // context's tables live in its own schema, so the first run for each is conflict-free.
+            try { await creator.CreateTablesAsync(); }
+            catch (Npgsql.PostgresException ex) when (ex.SqlState == "42P07") { /* duplicate_table */ }
+        }
     }
 
     app.Run();
@@ -118,6 +141,7 @@ try
 catch (Exception ex)
 {
     Log.Fatal(ex, "Host terminated unexpectedly");
+    throw;
 }
 finally
 {

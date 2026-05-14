@@ -1,3 +1,4 @@
+using ActualLab.CommandR;
 using Catalog.Application;
 using Catalog.Application.Contracts;
 using Catalog.Application.Features.CreateProduct;
@@ -9,7 +10,7 @@ namespace Catalog.Presentation;
 [ApiController]
 [Route("api/products")]
 [Authorize]
-public sealed class ProductsController(ICatalogService catalog) : ControllerBase
+public sealed class ProductsController(ICatalogService catalog, ICommander commander) : ControllerBase
 {
     [HttpGet]
     [AllowAnonymous]
@@ -18,7 +19,7 @@ public sealed class ProductsController(ICatalogService catalog) : ControllerBase
 
     [HttpPost]
     public async Task<ActionResult<ProductDto>> Create([FromBody] CreateProductRequest req, CancellationToken ct)
-        => Ok(await catalog.CreateProduct(new CreateProductCommand(req.Name, req.Price, req.Stock, req.Description), ct));
+        => Ok(await commander.Call(new CreateProductCommand(req.Name, req.Price, req.Stock, req.Description), ct));
 
     [HttpGet("export.xlsx")]
     [AllowAnonymous]

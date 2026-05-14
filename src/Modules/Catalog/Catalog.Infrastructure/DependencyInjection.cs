@@ -1,4 +1,5 @@
 using ActualLab.Fusion;
+using BuildingBlocks.Infrastructure;
 using BuildingBlocks.Infrastructure.Persistence;
 using Catalog.Application;
 using Catalog.Infrastructure.Persistence;
@@ -22,11 +23,14 @@ public static class DependencyInjection
             .AddInterceptors(sp.GetRequiredService<DomainEventDispatcherInterceptor>()));
 
         // Fusion compute service: replaces MediatR per-feature handler scan.
+        // Singleton (Fusion default) — service resolves scoped DbContext/IPublishEndpoint
+        // through IServiceScopeFactory per-call so DI lifetimes remain correct.
         services.AddFusion().AddService<ICatalogService, CatalogService>();
 
         // FluentValidation discovers Catalog.Application validators here
         // (CreateProductCommandValidator etc.).
         services.AddValidatorsFromAssembly(typeof(ICatalogService).Assembly);
+        services.AddCommandValidation(typeof(ICatalogService).Assembly);
 
         return services;
     }

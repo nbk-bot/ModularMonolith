@@ -9,6 +9,8 @@ using Identity.Application.Features.Register;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Testcontainers.PostgreSql;
+using Testcontainers.RabbitMq;
+using Testcontainers.Redis;
 
 namespace Api.Tests;
 
@@ -23,31 +25,42 @@ namespace Api.Tests;
 [Trait("Category", "Integration")]
 public sealed class ProductsControllerTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder()
-        .WithImage("postgres:16-alpine")
+    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine")
         .WithDatabase("modmono_tests")
         .WithUsername("postgres")
         .WithPassword("postgres")
         .Build();
 
+    private readonly RedisContainer _redis = new RedisBuilder("redis:7-alpine").Build();
+
+    private readonly RabbitMqContainer _rabbit = new RabbitMqBuilder("rabbitmq:3.13-management-alpine").Build();
+
     private WebApplicationFactory<Program> _factory = null!;
 
     public async Task InitializeAsync()
     {
-        await _postgres.StartAsync();
+        await Task.WhenAll(_postgres.StartAsync(), _redis.StartAsync(), _rabbit.StartAsync());
 
         _factory = new WebApplicationFactory<Program>()
             .WithWebHostBuilder(b =>
             {
                 b.UseEnvironment("Development");
                 b.UseSetting("ConnectionStrings:Postgres", _postgres.GetConnectionString());
+                b.UseSetting("ConnectionStrings:Redis", $"{_redis.Hostname}:{_redis.GetMappedPublicPort(6379)}");
+                b.UseSetting("ConnectionStrings:RabbitMQ", _rabbit.GetConnectionString());
+                // LoggerBot is wired through GlobalErrorHandler; provide dummy values so DI
+                // and error middleware don't crash on missing config in tests.
+                b.UseSetting("LoggerBot:Token", "test-token");
+                b.UseSetting("LoggerBot:ChatId", "0");
+                // HS256 requires a 256-bit key — 32+ ASCII chars satisfies that.
+                b.UseSetting("Jwt:SigningKey", "test-signing-key-must-be-at-least-32-bytes-long-for-hs256");
             });
     }
 
     public async Task DisposeAsync()
     {
         _factory.Dispose();
-        await _postgres.DisposeAsync();
+        await Task.WhenAll(_postgres.DisposeAsync().AsTask(), _redis.DisposeAsync().AsTask(), _rabbit.DisposeAsync().AsTask());
     }
 
     [Fact]

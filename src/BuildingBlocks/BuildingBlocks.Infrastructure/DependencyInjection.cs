@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using ActualLab.CommandR;
 using ActualLab.Fusion;
@@ -40,8 +41,10 @@ public static class DependencyInjection
         // Open-generic FluentValidation filter — runs before every business handler
         // (Priority = 1_000_000, IsFilter = true). FluentValidation discovers IValidator<>
         // instances per-module via AddValidatorsFromAssembly there.
+        // ActualLab.CommandR cannot register an open-generic handler directly, so each
+        // module calls AddCommandValidation(assembly) to register a closed-generic
+        // FluentValidationCommandHandler<TCommand> per ICommand it owns.
         services.AddTransient(typeof(ICommandHandler<>), typeof(FluentValidationCommandHandler<>));
-        commander.AddHandlers(typeof(FluentValidationCommandHandler<>));
 
         // Domain event dispatcher attached to every DbContext via interceptor (see BaseDbContext / IdentityDbContext registrations).
         services.AddSingleton<DomainEventDispatcherInterceptor>();
@@ -135,6 +138,26 @@ public static class DependencyInjection
                 .AddRuntimeInstrumentation()
                 .AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint)));
 
+        return services;
+    }
+
+    /// <summary>
+    /// Registers a closed-generic FluentValidationCommandHandler&lt;TCommand&gt; with
+    /// ActualLab.CommandR for every ICommand-implementing type in the given assembly.
+    /// Call from each module's AddXxxModule after AddBuildingBlocks.
+    /// </summary>
+    public static IServiceCollection AddCommandValidation(this IServiceCollection services, Assembly assembly)
+    {
+        var commander = services.AddFusion().Commander;
+        var commandTypes = assembly.GetTypes()
+            .Where(t => t is { IsAbstract: false, IsInterface: false } && typeof(ICommand).IsAssignableFrom(t));
+
+        foreach (var cmd in commandTypes)
+        {
+            var handlerType = typeof(FluentValidationCommandHandler<>).MakeGenericType(cmd);
+            services.AddTransient(handlerType);
+            commander.AddHandlers(handlerType);
+        }
         return services;
     }
 

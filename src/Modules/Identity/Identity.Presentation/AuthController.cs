@@ -1,3 +1,4 @@
+using ActualLab.CommandR;
 using Identity.Application;
 using Identity.Application.Contracts;
 using Identity.Application.Features.ConfirmEmail;
@@ -16,38 +17,38 @@ namespace Identity.Presentation;
 [ApiController]
 [Route("api/auth")]
 [EnableRateLimiting("auth")]
-public sealed class AuthController(IIdentityService identity) : ControllerBase
+public sealed class AuthController(ICommander commander) : ControllerBase
 {
     [HttpPost("register")]
     public async Task<ActionResult<UserDto>> Register([FromBody] RegisterRequest req, CancellationToken ct)
-        => Ok(await identity.Register(new RegisterCommand(req.Email, req.Password, req.FullName), ct));
+        => Ok(await commander.Call(new RegisterCommand(req.Email, req.Password, req.FullName), ct));
 
     [HttpPost("login")]
     public async Task<ActionResult<AuthTokens>> Login([FromBody] LoginRequest req, CancellationToken ct)
-        => Ok(await identity.Login(new LoginCommand(req.Email, req.Password), ct));
+        => Ok(await commander.Call(new LoginCommand(req.Email, req.Password), ct));
 
     [HttpPost("refresh")]
     public async Task<ActionResult<AuthTokens>> Refresh([FromBody] RefreshRequest req, CancellationToken ct)
-        => Ok(await identity.Refresh(new RefreshTokenCommand(req.RefreshToken), ct));
+        => Ok(await commander.Call(new RefreshTokenCommand(req.RefreshToken), ct));
 
     [HttpPost("forgot-password")]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest req, CancellationToken ct)
     {
-        await identity.ForgotPassword(new ForgotPasswordCommand(req.Email), ct);
+        await commander.Call(new ForgotPasswordCommand(req.Email), ct);
         return NoContent();
     }
 
     [HttpPost("reset-password")]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest req, CancellationToken ct)
     {
-        await identity.ResetPassword(new ResetPasswordCommand(req.Email, req.Token, req.NewPassword), ct);
+        await commander.Call(new ResetPasswordCommand(req.Email, req.Token, req.NewPassword), ct);
         return NoContent();
     }
 
     [HttpPost("confirm-email")]
     public async Task<IActionResult> ConfirmEmail([FromBody] ConfirmEmailRequest req, CancellationToken ct)
     {
-        await identity.ConfirmEmail(new ConfirmEmailCommand(req.UserId, req.Token), ct);
+        await commander.Call(new ConfirmEmailCommand(req.UserId, req.Token), ct);
         return NoContent();
     }
 
@@ -60,7 +61,7 @@ public sealed class AuthController(IIdentityService identity) : ControllerBase
         if (!Guid.TryParse(sub, out var userId))
             throw new UnauthorizedAccessException("Invalid subject claim");
 
-        await identity.Logout(new LogoutCommand(userId), ct);
+        await commander.Call(new LogoutCommand(userId), ct);
         return NoContent();
     }
 }

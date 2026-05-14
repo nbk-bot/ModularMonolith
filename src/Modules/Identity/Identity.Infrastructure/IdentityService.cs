@@ -15,6 +15,7 @@ using Identity.Domain;
 using Identity.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace Identity.Infrastructure;
@@ -26,17 +27,20 @@ namespace Identity.Infrastructure;
 /// so Fusion's interceptor can wrap them — the open-generic
 /// <see cref="BuildingBlocks.Infrastructure.Commands.FluentValidationCommandHandler{TCommand}"/>
 /// filter still runs first thanks to the <c>CommandR</c> pipeline.
+/// Registered as singleton (Fusion's default) so per-call scoped dependencies
+/// (UserManager, SignInManager, DbContext, ITokenService) must be resolved
+/// through IServiceScopeFactory.
 /// </summary>
 public class IdentityService(
-    UserManager<ApplicationUser> users,
-    SignInManager<ApplicationUser> signIn,
-    ITokenService tokens,
-    IdentityDbContext db,
+    IServiceScopeFactory scopeFactory,
     ISmsSender sms,
     IOptions<JwtOptions> jwtOpts) : IIdentityService
 {
     public virtual async Task<UserDto> Register(RegisterCommand command, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+
         var user = new ApplicationUser
         {
             UserName = command.Email,
@@ -52,6 +56,12 @@ public class IdentityService(
 
     public virtual async Task<AuthTokens> Login(LoginCommand command, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<ApplicationUser>>();
+        var tokens = scope.ServiceProvider.GetRequiredService<ITokenService>();
+        var db = scope.ServiceProvider.GetRequiredService<IdentityDbContext>();
+
         var user = await users.FindByEmailAsync(command.Email)
             ?? throw new UnauthorizedAccessException("Invalid credentials");
 
@@ -72,6 +82,10 @@ public class IdentityService(
 
     public virtual async Task<AuthTokens> Refresh(RefreshTokenCommand command, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var tokens = scope.ServiceProvider.GetRequiredService<ITokenService>();
+        var db = scope.ServiceProvider.GetRequiredService<IdentityDbContext>();
+
         var user = await db.Users.SingleOrDefaultAsync(u => u.RefreshToken == command.RefreshToken, ct)
             ?? throw new UnauthorizedAccessException("Invalid refresh token");
 
@@ -90,6 +104,9 @@ public class IdentityService(
 
     public virtual async Task ForgotPassword(ForgotPasswordCommand command, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+
         var user = await users.FindByEmailAsync(command.Email)
             ?? throw new InvalidOperationException("User not found");
 
@@ -102,6 +119,9 @@ public class IdentityService(
 
     public virtual async Task ResetPassword(ResetPasswordCommand command, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+
         var user = await users.FindByEmailAsync(command.Email)
             ?? throw new InvalidOperationException("User not found");
 
@@ -112,6 +132,9 @@ public class IdentityService(
 
     public virtual async Task ConfirmEmail(ConfirmEmailCommand command, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+
         var user = await users.FindByIdAsync(command.UserId)
             ?? throw new InvalidOperationException("User not found");
 
@@ -122,6 +145,9 @@ public class IdentityService(
 
     public virtual async Task Logout(LogoutCommand command, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<IdentityDbContext>();
+
         var user = await db.Users.SingleOrDefaultAsync(u => u.Id == command.UserId, ct)
             ?? throw new InvalidOperationException("User not found");
 
@@ -132,6 +158,10 @@ public class IdentityService(
 
     public virtual async Task<UserDto?> GetCurrentUser(Guid userId, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var db = scope.ServiceProvider.GetRequiredService<IdentityDbContext>();
+
         var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == userId, ct);
         if (user is null) return null;
         var roles = await users.GetRolesAsync(user);

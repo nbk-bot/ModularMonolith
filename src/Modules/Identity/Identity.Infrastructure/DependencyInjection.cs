@@ -1,5 +1,6 @@
 using ActualLab.Fusion;
 using BuildingBlocks.Application.Abstractions;
+using BuildingBlocks.Infrastructure;
 using BuildingBlocks.Infrastructure.Persistence;
 using FluentValidation;
 using Identity.Application;
@@ -46,10 +47,13 @@ public static class DependencyInjection
         // Fusion compute service: replaces MediatR per-feature handler scan.
         // CommandR routes [CommandHandler]-marked methods through the FluentValidation
         // open-generic filter registered in AddBuildingBlocks.
+        // Singleton (Fusion default) — service resolves scoped UserManager/SignInManager/DbContext/ITokenService
+        // through IServiceScopeFactory per-call so DI lifetimes remain correct.
         services.AddFusion().AddService<IIdentityService, IdentityService>();
 
         // FluentValidation discovers Identity.Application validators here.
         services.AddValidatorsFromAssembly(typeof(IIdentityService).Assembly);
+        services.AddCommandValidation(typeof(IIdentityService).Assembly);
 
         return services;
     }

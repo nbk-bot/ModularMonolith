@@ -5,6 +5,7 @@ using Catalog.Infrastructure.Persistence;
 using FluentAssertions;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace Catalog.Infrastructure.Tests;
@@ -14,30 +15,35 @@ namespace Catalog.Infrastructure.Tests;
 /// directly. We deliberately skip Fusion proxy wiring (CommandR pipeline,
 /// FluentValidation filter, [ComputeMethod] interception) — those are integration
 /// concerns. Here we exercise business logic against EF Core in-memory + a mocked
-/// <see cref="IPublishEndpoint"/>.
+/// <see cref="IPublishEndpoint"/>, wired through a real IServiceScopeFactory because
+/// <see cref="CatalogService"/> resolves scoped dependencies per-call.
 /// </summary>
 public class CatalogServiceTests
 {
-    private static CatalogDbContext NewDb()
+    private static (CatalogService sut, IServiceProvider sp, Mock<IPublishEndpoint> bus) BuildSut()
     {
-        var options = new DbContextOptionsBuilder<CatalogDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options;
-        return new CatalogDbContext(options);
+        var dbName = Guid.NewGuid().ToString();
+        var bus = new Mock<IPublishEndpoint>();
+        var services = new ServiceCollection();
+        services.AddDbContext<CatalogDbContext>(o => o.UseInMemoryDatabase(dbName));
+        services.AddSingleton(bus.Object);
+        var sp = services.BuildServiceProvider();
+        var sut = new CatalogService(sp.GetRequiredService<IServiceScopeFactory>());
+        return (sut, sp, bus);
     }
 
     [Fact]
     public async Task CreateProduct_PersistsToDb_AndPublishesIntegrationEvent()
     {
-        await using var db = NewDb();
-        var bus = new Mock<IPublishEndpoint>();
-        var sut = new CatalogService(db, bus.Object);
+        var (sut, sp, bus) = BuildSut();
 
         var dto = await sut.CreateProduct(new CreateProductCommand("Phone", 199.99m, 5, "desc"));
 
         dto.Name.Should().Be("Phone");
         dto.Price.Should().Be(199.99m);
 
+        await using var scope = sp.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CatalogDbContext>();
         var persisted = await db.Products.SingleAsync();
         persisted.Name.Should().Be("Phone");
         persisted.Id.Should().Be(dto.Id);
@@ -51,9 +57,7 @@ public class CatalogServiceTests
     [Fact]
     public async Task GetProducts_ReturnsPaginatedDescending()
     {
-        await using var db = NewDb();
-        var bus = new Mock<IPublishEndpoint>();
-        var sut = new CatalogService(db, bus.Object);
+        var (sut, _, _) = BuildSut();
 
         await sut.CreateProduct(new CreateProductCommand("A", 10m, 1, null));
         await Task.Delay(5);

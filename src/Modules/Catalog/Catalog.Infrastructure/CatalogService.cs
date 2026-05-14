@@ -7,6 +7,7 @@ using Catalog.Domain;
 using Catalog.Infrastructure.Persistence;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Catalog.Infrastructure;
 
@@ -16,11 +17,17 @@ namespace Catalog.Infrastructure;
 /// methods are <c>virtual</c> so Fusion can intercept them. <c>CreateProduct</c>
 /// keeps the MassTransit EF Core outbox semantics — publishing before
 /// <c>SaveChangesAsync</c> so the message is committed atomically.
+/// Registered as singleton (Fusion's default) so per-call scoped dependencies
+/// (DbContext, IPublishEndpoint) must be resolved through IServiceScopeFactory.
 /// </summary>
-public class CatalogService(CatalogDbContext db, IPublishEndpoint bus) : ICatalogService
+public class CatalogService(IServiceScopeFactory scopeFactory) : ICatalogService
 {
     public virtual async Task<ProductDto> CreateProduct(CreateProductCommand command, CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CatalogDbContext>();
+        var bus = scope.ServiceProvider.GetRequiredService<IPublishEndpoint>();
+
         var product = Product.Create(command.Name, command.Price, command.Stock, command.Description);
         db.Products.Add(product);
 
@@ -39,6 +46,9 @@ public class CatalogService(CatalogDbContext db, IPublishEndpoint bus) : ICatalo
     {
         if (page < 1) page = 1;
         if (pageSize < 1) pageSize = 20;
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CatalogDbContext>();
 
         var items = await db.Products
             .AsNoTracking()
